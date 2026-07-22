@@ -44,7 +44,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--backfill",
         action="store_true",
-        help="initialize history without sending notifications",
+        help="initialize all available history without notifications",
     )
     args = parser.parse_args()
 
