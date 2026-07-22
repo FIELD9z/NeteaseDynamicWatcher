@@ -1,16 +1,11 @@
+from __future__ import annotations
+
 import json
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
-
-@dataclass
-class Event:
-    event_id: str
-    event_type: str
-    summary: str
-    publish_time: int
-    url: str
+from netease_dynamic_watcher.models import Event
 
 
 class StateStore:
@@ -18,12 +13,75 @@ class StateStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, payload TEXT)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events(
+                    user_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(user_id, event_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS metadata(
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
 
-    def is_seen(self, event_id: str) -> bool:
-        with sqlite3.connect(self.path) as conn:
-            return conn.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone() is not None
+    def is_initialized(self, user_id: str) -> bool:
+        return self.get_metadata(f"initialized:{user_id}") == "1"
 
-    def save(self, event: Event):
+    def mark_initialized(self, user_id: str) -> None:
+        self.set_metadata(f"initialized:{user_id}", "1")
+
+    def is_seen(self, user_id: str, event_id: str) -> bool:
         with sqlite3.connect(self.path) as conn:
-            conn.execute("INSERT OR IGNORE INTO events VALUES (?, ?)", (event.event_id, json.dumps(event.__dict__, ensure_ascii=False)))
+            row = conn.execute(
+                "SELECT 1 FROM events WHERE user_id=? AND event_id=?",
+                (user_id, event_id),
+            ).fetchone()
+        return row is not None
+
+    def save(self, event: Event) -> None:
+        payload = json.dumps(event.__dict__, ensure_ascii=False, sort_keys=True)
+        with sqlite3.connect(self.path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO events(user_id, event_id, payload) VALUES (?, ?, ?)",
+                (event.user_id, event.event_id, payload),
+            )
+
+    def save_many(self, events: Iterable[Event]) -> None:
+        with sqlite3.connect(self.path) as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO events(user_id, event_id, payload) VALUES (?, ?, ?)",
+                [
+                    (
+                        event.user_id,
+                        event.event_id,
+                        json.dumps(event.__dict__, ensure_ascii=False, sort_keys=True),
+                    )
+                    for event in events
+                ],
+            )
+
+    def get_metadata(self, key: str) -> str | None:
+        with sqlite3.connect(self.path) as conn:
+            row = conn.execute(
+                "SELECT value FROM metadata WHERE key=?", (key,)
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_metadata(self, key: str, value: str) -> None:
+        with sqlite3.connect(self.path) as conn:
+            conn.execute(
+                """
+                INSERT INTO metadata(key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (key, value),
+            )
