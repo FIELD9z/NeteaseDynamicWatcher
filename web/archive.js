@@ -1,0 +1,9 @@
+(() => {
+  const root = document.documentElement;
+  const body = document.body;
+  const searchInput = document.getElementById("search");
+  const monthSelect = document.getElementById("month-select");
+  const densitySelect = document.getElementById("density-select");
+  const themeButton = document.getElementById("theme-toggle");
+  const filterButtons = [...document.querySelectorAll("[data-filter]")];
+  const cards = [...document.querySelectorAll(".
