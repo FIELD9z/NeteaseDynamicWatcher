@@ -3,20 +3,22 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
+from netease_dynamic_watcher.media_archive import unique_media_urls
 from netease_dynamic_watcher.models import Event
 
 
 _IMAGE_CONTAINER_KEYS = ("pics", "images", "pictures")
 _VIDEO_CONTAINER_KEYS = ("video", "videoInfo", "videoUrl", "mv")
-_IMAGE_URL_KEYS = {
-    "url",
+_IMAGE_URL_PRIORITY = (
     "originurl",
-    "squareurl",
-    "pcsquareurl",
-    "rectangleurl",
+    "url",
     "picurl",
     "imageurl",
-}
+    "rectangleurl",
+    "squareurl",
+    "pcsquareurl",
+)
+_IMAGE_URL_KEYS = set(_IMAGE_URL_PRIORITY)
 _VIDEO_URL_KEYS = {
     "url",
     "playurl",
@@ -63,13 +65,46 @@ def _song_summary(payload: dict[str, Any]) -> str:
     return "分享了一首歌曲"
 
 
-def _collect_urls(value: Any, allowed_keys: set[str]) -> tuple[str, ...]:
+def _normalized_key(value: Any) -> str:
+    return str(value).replace("_", "").lower()
+
+
+def _collect_image_urls(value: Any) -> tuple[str, ...]:
+    """Keep one preferred URL per image object, not every resized variant."""
+
+    result: list[str] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            normalized = {_normalized_key(key): child for key, child in node.items()}
+            selected = ""
+            for key in _IMAGE_URL_PRIORITY:
+                child = normalized.get(key)
+                if isinstance(child, str) and child.startswith(("http://", "https://")):
+                    selected = child
+                    break
+            if selected:
+                result.append(selected)
+
+            # Continue through non-URL children because containers can be nested.
+            for key, child in node.items():
+                if _normalized_key(key) not in _IMAGE_URL_KEYS:
+                    visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    visit(value)
+    return tuple(unique_media_urls(result, "image"))
+
+
+def _collect_urls(value: Any, allowed_keys: set[str], kind: str) -> tuple[str, ...]:
     result: list[str] = []
 
     def visit(node: Any) -> None:
         if isinstance(node, dict):
             for key, child in node.items():
-                normalized_key = str(key).replace("_", "").lower()
+                normalized_key = _normalized_key(key)
                 if (
                     isinstance(child, str)
                     and child.startswith(("http://", "https://"))
@@ -83,20 +118,32 @@ def _collect_urls(value: Any, allowed_keys: set[str]) -> tuple[str, ...]:
                 visit(child)
 
     visit(value)
-    return tuple(dict.fromkeys(result))
+    return tuple(unique_media_urls(result, kind))
+
+
+def _extract_image_urls_from_containers(
+    sources: Iterable[dict[str, Any]],
+) -> tuple[str, ...]:
+    urls: list[str] = []
+    for source in sources:
+        for key in _IMAGE_CONTAINER_KEYS:
+            if key in source:
+                urls.extend(_collect_image_urls(source[key]))
+    return tuple(unique_media_urls(urls, "image"))
 
 
 def _extract_urls_from_containers(
     sources: Iterable[dict[str, Any]],
     container_keys: Iterable[str],
     allowed_keys: set[str],
+    kind: str,
 ) -> tuple[str, ...]:
     urls: list[str] = []
     for source in sources:
         for key in container_keys:
             if key in source:
-                urls.extend(_collect_urls(source[key], allowed_keys))
-    return tuple(dict.fromkeys(urls))
+                urls.extend(_collect_urls(source[key], allowed_keys, kind))
+    return tuple(unique_media_urls(urls, kind))
 
 
 def _find_forward_payload(
@@ -158,15 +205,12 @@ def parse_events(payload: dict[str, Any], user_id: str = "") -> list[Event]:
             item.get("nickname") or user.get("nickname") or "未知用户"
         ).strip()
 
-        image_urls = _extract_urls_from_containers(
-            (item, embedded),
-            _IMAGE_CONTAINER_KEYS,
-            _IMAGE_URL_KEYS,
-        )
+        image_urls = _extract_image_urls_from_containers((item, embedded))
         video_urls = _extract_urls_from_containers(
             (item, embedded),
             _VIDEO_CONTAINER_KEYS,
             _VIDEO_URL_KEYS,
+            "video",
         )
         forward_payload = _find_forward_payload(item, embedded)
         forwarded_event_id = str(
