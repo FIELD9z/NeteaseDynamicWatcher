@@ -6,7 +6,7 @@ import time
 from netease_dynamic_watcher.config import Config
 
 
-def run_once() -> None:
+def run_once(backfill: bool = False) -> None:
     from netease_dynamic_watcher.client import NeteaseClient
     from netease_dynamic_watcher.notifier import PushMeNotifier, PushNotifier
     from netease_dynamic_watcher.service import WatcherService
@@ -29,8 +29,7 @@ def run_once() -> None:
         target_uid=config.target_uid,
         events_url=config.events_url_template.format(uid=config.target_uid),
     )
-    report = service.run_once()
-    print(report)
+    print(service.run_once(backfill=backfill))
 
 
 def run_forever(interval_seconds: int = 900):
@@ -42,9 +41,16 @@ def run_forever(interval_seconds: int = 900):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="initialize history without sending notifications",
+    )
     args = parser.parse_args()
 
-    if args.once:
+    if args.backfill:
+        run_once(backfill=True)
+    elif args.once:
         run_once()
     else:
         run_forever()
