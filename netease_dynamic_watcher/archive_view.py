@@ -10,6 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from netease_dynamic_watcher.media_archive import (
+    canonical_media_url,
+    iter_media,
+    unique_media_urls,
+)
+
 
 TYPE_LABELS = {
     "dynamic": "文字动态",
@@ -18,6 +24,7 @@ TYPE_LABELS = {
     "forward": "转发动态",
     "video": "视频动态",
 }
+MediaMap = dict[tuple[str, str, str], Path]
 
 
 def safe(value: Any) -> str:
@@ -45,9 +52,7 @@ def load_archive_events(database: str | Path) -> list[dict[str, Any]]:
         raise FileNotFoundError(f"数据库不存在：{path}")
 
     with sqlite3.connect(path) as connection:
-        rows = connection.execute(
-            "SELECT payload, seen_at FROM events"
-        ).fetchall()
+        rows = connection.execute("SELECT payload, seen_at FROM events").fetchall()
 
     events: list[dict[str, Any]] = []
     for payload, seen_at in rows:
@@ -55,10 +60,20 @@ def load_archive_events(database: str | Path) -> list[dict[str, Any]]:
             event = json.loads(payload)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict):
-            event = dict(event)
-            event["seen_at"] = seen_at
-            events.append(event)
+        if not isinstance(event, dict):
+            continue
+        event = dict(event)
+        event["seen_at"] = seen_at
+        # Old database rows may contain multiple resized URLs for one image.
+        event["image_urls"] = unique_media_urls(
+            event.get("image_urls") or [],
+            "image",
+        )
+        event["video_urls"] = unique_media_urls(
+            event.get("video_urls") or [],
+            "video",
+        )
+        events.append(event)
 
     events.sort(
         key=lambda event: (
@@ -70,7 +85,7 @@ def load_archive_events(database: str | Path) -> list[dict[str, Any]]:
     return events
 
 
-def load_media_manifest(path: str | Path) -> dict[tuple[str, str], Path]:
+def load_media_manifest(path: str | Path) -> MediaMap:
     manifest_path = Path(path)
     if not manifest_path.exists():
         return {}
@@ -79,20 +94,23 @@ def load_media_manifest(path: str | Path) -> dict[tuple[str, str], Path]:
     except (OSError, json.JSONDecodeError):
         return {}
 
-    result: dict[tuple[str, str], Path] = {}
+    result: MediaMap = {}
     items = manifest.get("items", []) if isinstance(manifest, dict) else []
     if not isinstance(items, list):
         return result
     for item in items:
         if not isinstance(item, dict):
             continue
-        if item.get("status") not in {"downloaded", "existing"}:
+        if item.get("status") not in {"downloaded", "existing", "deduplicated"}:
             continue
         event_id = str(item.get("event_id") or "")
+        kind = str(item.get("kind") or "image")
         source_url = str(item.get("source_url") or "")
+        canonical = str(item.get("canonical_url") or "")
+        canonical = canonical or canonical_media_url(source_url, kind)
         local_path = str(item.get("local_path") or "")
-        if event_id and source_url and local_path:
-            result[(event_id, source_url)] = manifest_path.parent / local_path
+        if event_id and kind and canonical and local_path:
+            result[(event_id, kind, canonical)] = manifest_path.parent / local_path
     return result
 
 
@@ -112,11 +130,12 @@ def _artist_names(song: dict[str, Any]) -> list[str]:
     value = song.get("artists") or song.get("ar") or []
     if not isinstance(value, list):
         return []
-    result: list[str] = []
-    for artist in value:
-        if isinstance(artist, dict) and artist.get("name"):
-            result.append(str(artist["name"]).strip())
-    return [name for name in result if name]
+    names = [
+        str(artist.get("name") or "").strip()
+        for artist in value
+        if isinstance(artist, dict)
+    ]
+    return [name for name in names if name]
 
 
 def extract_song(event: dict[str, Any]) -> dict[str, str]:
@@ -188,14 +207,43 @@ def _relative_path(path: Path, output: Path) -> str:
     return os.path.relpath(path, output.parent).replace(os.sep, "/")
 
 
-def _render_song_card(song: dict[str, str]) -> str:
+def _local_media(
+    media_map: MediaMap,
+    event_id: str,
+    kind: str,
+    source_url: str,
+) -> Path | None:
+    canonical = canonical_media_url(source_url, kind)
+    path = media_map.get((event_id, kind, canonical))
+    return path if path and path.exists() else None
+
+
+def _missing_resource(label: str) -> str:
+    return (
+        '<div class="media-missing">'
+        f'<strong>{safe(label)}未完成本地归档</strong>'
+        '<span>重新运行 open_ui.py 或 archive_media.py 后再查看。</span>'
+        "</div>"
+    )
+
+
+def _render_song_card(
+    event: dict[str, Any],
+    song: dict[str, str],
+    output: Path,
+    media_map: MediaMap,
+) -> str:
     if not song:
         return ""
-    cover = (
-        f'<img src="{safe(song.get("cover"))}" loading="lazy" alt="歌曲封面">'
-        if song.get("cover")
-        else '<div class="song-cover-placeholder">♪</div>'
-    )
+    event_id = str(event.get("event_id") or "")
+    cover_url = song.get("cover", "")
+    local_cover = _local_media(media_map, event_id, "song_cover", cover_url)
+    if local_cover:
+        cover_src = safe(_relative_path(local_cover, output))
+        cover = f'<img src="{cover_src}" loading="lazy" alt="歌曲封面">'
+    else:
+        cover = '<div class="song-cover-placeholder">♪</div>'
+
     title = safe(song.get("name"))
     artists = safe(song.get("artists"))
     album = safe(song.get("album"))
@@ -220,22 +268,28 @@ def _render_song_card(song: dict[str, str]) -> str:
 def _render_images(
     event: dict[str, Any],
     output: Path,
-    media_map: dict[tuple[str, str], Path],
+    media_map: MediaMap,
 ) -> str:
     event_id = str(event.get("event_id") or "")
     items: list[str] = []
-    for index, raw_url in enumerate(event.get("image_urls") or [], start=1):
-        source_url = str(raw_url)
-        local = media_map.get((event_id, source_url))
-        local_exists = bool(local and local.exists())
-        image_src = _relative_path(local, output) if local_exists and local else source_url
-        badge = "本地归档" if local_exists else "在线图片"
-        caption = f"事件 {event_id} · 图片 {index}"
+    rendered_files: set[str] = set()
+    urls = unique_media_urls(event.get("image_urls") or [], "image")
+    for index, source_url in enumerate(urls, start=1):
+        local = _local_media(media_map, event_id, "image", source_url)
+        if not local:
+            items.append(_missing_resource(f"图片 {index}"))
+            continue
+        resolved = str(local.resolve())
+        if resolved in rendered_files:
+            continue
+        rendered_files.add(resolved)
+        image_src = _relative_path(local, output)
+        caption = f"事件 {event_id} · 图片 {len(rendered_files)}"
         items.append(
             f"""
 <button class="media-item" type="button" data-full="{safe(image_src)}" data-caption="{safe(caption)}">
   <img src="{safe(image_src)}" loading="lazy" alt="{safe(caption)}">
-  <span class="media-origin">{badge}</span>
+  <span class="media-origin">本地归档</span>
 </button>
 """
         )
@@ -245,19 +299,38 @@ def _render_images(
     return f'<div class="gallery gallery-count-{visible_class}">{"".join(items)}</div>'
 
 
-def _render_videos(event: dict[str, Any]) -> str:
-    links: list[str] = []
-    for index, url in enumerate(event.get("video_urls") or [], start=1):
-        links.append(
-            f'<a class="video-link" href="{safe(url)}" target="_blank" rel="noreferrer">打开视频 {index}</a>'
+def _render_videos(
+    event: dict[str, Any],
+    output: Path,
+    media_map: MediaMap,
+) -> str:
+    event_id = str(event.get("event_id") or "")
+    items: list[str] = []
+    rendered_files: set[str] = set()
+    for index, source_url in enumerate(
+        unique_media_urls(event.get("video_urls") or [], "video"),
+        start=1,
+    ):
+        local = _local_media(media_map, event_id, "video", source_url)
+        if not local:
+            items.append(_missing_resource(f"视频 {index}"))
+            continue
+        resolved = str(local.resolve())
+        if resolved in rendered_files:
+            continue
+        rendered_files.add(resolved)
+        video_src = _relative_path(local, output)
+        items.append(
+            f'<video class="local-video" controls preload="metadata" '
+            f'src="{safe(video_src)}">浏览器不支持视频播放。</video>'
         )
-    return f'<div class="video-links">{"".join(links)}</div>' if links else ""
+    return f'<div class="video-gallery">{"".join(items)}</div>' if items else ""
 
 
 def _render_event_card(
     event: dict[str, Any],
     output: Path,
-    media_map: dict[tuple[str, str], Path],
+    media_map: MediaMap,
 ) -> str:
     published = parse_timestamp(event.get("publish_time_ms"))
     day = "--" if published is None else published.strftime("%d")
@@ -322,10 +395,10 @@ def _render_event_card(
       <span class="type-pill">{safe(type_label)}</span>
     </header>
     <div class="event-summary">{summary}</div>
-    {_render_song_card(song)}
+    {_render_song_card(event, song, output, media_map)}
     {forward}
     {_render_images(event, output, media_map)}
-    {_render_videos(event)}
+    {_render_videos(event, output, media_map)}
     <footer class="event-footer">
       <div class="engagement">
         <span>评论 <b>{safe(event.get('comment_count', 0))}</b></span>
@@ -347,12 +420,6 @@ def _runtime_copy(runtime_summary: dict[str, Any]) -> tuple[str, str, str]:
         "failure": "最近一次检查失败",
         "running": "正在检查",
     }.get(status, "尚未记录运行状态")
-    time_value = (
-        runtime.get("finished_at")
-        or runtime.get("started_at")
-        or runtime.get("updated_at")
-        or ""
-    )
     detail = str(runtime.get("error_message") or "")
     if not detail and isinstance(runtime.get("report"), dict):
         report = runtime["report"]
@@ -361,13 +428,14 @@ def _runtime_copy(runtime_summary: dict[str, Any]) -> tuple[str, str, str]:
             f"新增 {report.get('new_events', 0)} 条，"
             f"通知 {report.get('delivered_notifications', 0)} 条"
         )
-    return status, status_label, str(time_value or detail or "打开页面时读取本地数据库")
+    time_value = runtime.get("finished_at") or runtime.get("started_at") or ""
+    return status, status_label, str(detail or time_value or "打开页面时读取本地数据库")
 
 
 def render_archive_html(
     events: list[dict[str, Any]],
     output: str | Path,
-    media_map: dict[tuple[str, str], Path] | None = None,
+    media_map: MediaMap | None = None,
     runtime_summary: dict[str, Any] | None = None,
 ) -> str:
     output_path = Path(output)
@@ -375,14 +443,19 @@ def render_archive_html(
     runtime_summary = runtime_summary or {}
     groups = group_events_by_month(events)
     type_counts = Counter(kind for event in events for kind in event_kinds(event))
-    image_count = sum(bool(event.get("image_urls")) for event in events)
-    local_image_count = sum(
-        1
-        for event in events
-        for url in event.get("image_urls") or []
-        if (str(event.get("event_id") or ""), str(url)) in media_map
-        and media_map[(str(event.get("event_id") or ""), str(url))].exists()
+    candidates = list(iter_media(events, include_videos=True))
+    local_media_count = sum(
+        bool(
+            _local_media(
+                media_map,
+                candidate.event_id,
+                candidate.kind,
+                candidate.source_url,
+            )
+        )
+        for candidate in candidates
     )
+    missing_media_count = max(len(candidates) - local_media_count, 0)
 
     month_options = ['<option value="">跳转到月份</option>']
     month_navigation: list[str] = []
@@ -430,6 +503,7 @@ def render_archive_html(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; img-src 'self' data:; media-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'">
   <title>网易云动态档案</title>
   <link rel="stylesheet" href="assets/archive.css">
 </head>
@@ -440,15 +514,15 @@ def render_archive_html(
       <div>
         <div class="eyebrow">NETEASE DYNAMIC ARCHIVE</div>
         <h1>把时间线保存成<br>可以慢慢阅读的档案。</h1>
-        <p class="hero-copy">页面由本地 SQLite 生成。图片优先读取本地归档，原始 JSON 仍可按需展开。</p>
+        <p class="hero-copy">页面只加载本地媒体文件。远程地址保留在原始 JSON 中，但不会被页面直接加载。</p>
       </div>
       <button id="theme-toggle" class="icon-button" type="button" aria-label="切换主题">◐</button>
     </div>
     <div class="stats">
       <div class="stat"><strong>{len(events)}</strong><span>全部动态</span></div>
       <div class="stat"><strong>{type_counts.get('song_share', 0)}</strong><span>歌曲分享</span></div>
-      <div class="stat"><strong>{image_count}</strong><span>带图片动态</span></div>
-      <div class="stat"><strong>{local_image_count}</strong><span>本地归档图片</span></div>
+      <div class="stat"><strong>{local_media_count}</strong><span>本地媒体</span></div>
+      <div class="stat"><strong>{missing_media_count}</strong><span>待补齐资源</span></div>
     </div>
     <div class="runtime-card status-{safe(status)}">
       <div><span class="status-dot"></span><strong>{safe(status_label)}</strong></div>
