@@ -47,23 +47,59 @@ class StateStore:
             ).fetchone()
         return row is not None
 
+    @staticmethod
+    def _serialize(event: Event) -> str:
+        return json.dumps(
+            {
+                "event_id": event.event_id,
+                "user_id": event.user_id,
+                "nickname": event.nickname,
+                "event_type": event.event_type,
+                "summary": event.summary,
+                "publish_time_ms": event.publish_time_ms,
+                "url": event.url,
+                "raw_type": event.raw_type,
+                "image_urls": list(event.image_urls),
+                "video_urls": list(event.video_urls),
+                "forwarded_event_id": event.forwarded_event_id,
+                "forwarded_summary": event.forwarded_summary,
+                "comment_count": event.comment_count,
+                "share_count": event.share_count,
+                "liked_count": event.liked_count,
+                "comment_thread_id": event.comment_thread_id,
+                "raw_payload": event.raw_payload,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
     def save(self, event: Event) -> None:
-        payload = json.dumps(event.__dict__, ensure_ascii=False, sort_keys=True)
+        payload = self._serialize(event)
         with sqlite3.connect(self.path) as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO events(user_id, event_id, payload) VALUES (?, ?, ?)",
+                """
+                INSERT INTO events(user_id, event_id, payload)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, event_id)
+                DO UPDATE SET payload=excluded.payload
+                """,
                 (event.user_id, event.event_id, payload),
             )
 
     def save_many(self, events: Iterable[Event]) -> None:
         with sqlite3.connect(self.path) as conn:
             conn.executemany(
-                "INSERT OR IGNORE INTO events(user_id, event_id, payload) VALUES (?, ?, ?)",
+                """
+                INSERT INTO events(user_id, event_id, payload)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, event_id)
+                DO UPDATE SET payload=excluded.payload
+                """,
                 [
                     (
                         event.user_id,
                         event.event_id,
-                        json.dumps(event.__dict__, ensure_ascii=False, sort_keys=True),
+                        self._serialize(event),
                     )
                     for event in events
                 ],
