@@ -15,6 +15,7 @@ def utc_now() -> str:
 
 def run_once(backfill: bool = False):
     from netease_dynamic_watcher.client import NeteaseClient
+    from netease_dynamic_watcher.media_archive import archive_database_media
     from netease_dynamic_watcher.notifier import PushMeNotifier, PushNotifier
     from netease_dynamic_watcher.service import WatcherService
     from netease_dynamic_watcher.store import StateStore
@@ -53,6 +54,27 @@ def run_once(backfill: bool = False):
         )
         report = service.run_once(backfill=backfill)
         report_payload = asdict(report)
+
+        media_report: dict[str, int] = {}
+        media_error = ""
+        try:
+            media_report = archive_database_media(
+                config.database_path,
+                output_dir="data/media",
+                manifest_path="data/media/manifest.json",
+                include_videos=True,
+                timeout=max(config.request_timeout_seconds, 1),
+            )
+            if media_report.get("failed", 0) or media_report.get("skipped", 0):
+                logger.warning("Media archive completed with gaps: %s", media_report)
+            else:
+                logger.info("Media archive completed: %s", media_report)
+        except Exception as exc:
+            # The event payload has already been committed to SQLite. Keep it and
+            # retry media synchronization on the next watcher run.
+            media_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("Media archive synchronization failed")
+
         write_runtime_status(
             config.database_path,
             {
@@ -62,6 +84,8 @@ def run_once(backfill: bool = False):
                 "finished_at": utc_now(),
                 "target_uid": config.target_uid,
                 "report": report_payload,
+                "media_report": media_report,
+                "media_error": media_error,
             },
         )
         logger.info(
@@ -72,6 +96,7 @@ def run_once(backfill: bool = False):
             report.delivered_notifications,
         )
         print(report)
+        print("MediaArchiveReport", media_report or {"error": media_error})
         return report
     except Exception as exc:
         write_runtime_status(
