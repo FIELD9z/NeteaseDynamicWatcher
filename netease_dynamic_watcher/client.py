@@ -44,7 +44,9 @@ class NeteaseClient:
         limit: int,
         lasttime: int = -1,
     ) -> dict[str, Any]:
-        request_url = self._with_query(url, limit=limit, lasttime=lasttime)
+        # The public wrapper calls this argument ``lasttime``, but the direct
+        # NetEase endpoint expects the underlying query field to be ``time``.
+        request_url = self._with_query(url, limit=limit, time=lasttime)
         request = urllib.request.Request(
             request_url,
             headers={
