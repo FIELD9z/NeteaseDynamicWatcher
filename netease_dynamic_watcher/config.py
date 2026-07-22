@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Mapping
 
 
+DEFAULT_EVENTS_URL_TEMPLATE = "https://music.163.com/api/event/get/{uid}"
+
+
 def read_env_file(path: str | Path = ".env") -> dict[str, str]:
     """Read a small KEY=VALUE file without printing or transforming secrets."""
     file_path = Path(path)
@@ -31,7 +34,7 @@ class Config:
     target_uid: str = "1413380977"
     interval_minutes: int = 15
     database_path: str = "data/watcher.sqlite3"
-    events_url_template: str = "https://music.163.com/api/user/event/{uid}"
+    events_url_template: str = DEFAULT_EVENTS_URL_TEMPLATE
     notification_endpoint: str = "https://push.i-i.me/"
     request_timeout_seconds: int = 15
 
@@ -46,7 +49,7 @@ class Config:
             database_path=env.get("DATABASE_PATH", "data/watcher.sqlite3").strip(),
             events_url_template=env.get(
                 "NETEASE_EVENTS_URL_TEMPLATE",
-                "https://music.163.com/api/user/event/{uid}",
+                DEFAULT_EVENTS_URL_TEMPLATE,
             ).strip(),
             notification_endpoint=env.get(
                 "PUSH_ENDPOINT", "https://push.i-i.me/"
