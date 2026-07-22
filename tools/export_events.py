@@ -17,6 +17,7 @@ from netease_dynamic_watcher.archive_view import (  # noqa: E402
     load_archive_events,
     write_archive_html,
 )
+from netease_dynamic_watcher.media_archive import archive_database_media  # noqa: E402
 from netease_dynamic_watcher.runtime_state import collect_runtime_summary  # noqa: E402
 
 
@@ -96,6 +97,12 @@ def main() -> None:
     parser.add_argument("--media-manifest", default="data/media/manifest.json")
     args = parser.parse_args()
 
+    archive_database_media(
+        args.database,
+        output_dir="data/media",
+        manifest_path=args.media_manifest,
+        include_videos=True,
+    )
     events = load_archive_events(args.database)
     output = Path(args.output)
     write_archive_html(
