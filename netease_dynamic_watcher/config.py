@@ -2,7 +2,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
 from typing import Mapping
+
+
+def read_env_file(path: str | Path = ".env") -> dict[str, str]:
+    """Read a small KEY=VALUE file without printing or transforming secrets."""
+    file_path = Path(path)
+    if not file_path.exists():
+        return {}
+
+    result: dict[str, str] = {}
+    for raw_line in file_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            result[key] = value.strip()
+    return result
 
 
 @dataclass(frozen=True)
@@ -35,6 +54,12 @@ class Config:
             request_timeout_seconds=int(env.get("REQUEST_TIMEOUT_SECONDS", "15")),
         )
 
+    @classmethod
+    def from_sources(cls, env_file: str | Path = ".env") -> "Config":
+        merged = read_env_file(env_file)
+        merged.update(os.environ)
+        return cls.from_env(merged)
+
     def validate_runtime(self) -> None:
         if not self.target_uid.isdigit():
             raise ValueError("TARGET_UID must contain digits only")
@@ -44,8 +69,12 @@ class Config:
             raise ValueError("PUSHME_KEY is required")
         if self.interval_minutes < 1:
             raise ValueError("CHECK_INTERVAL_MINUTES must be at least 1")
+        if self.request_timeout_seconds < 1:
+            raise ValueError("REQUEST_TIMEOUT_SECONDS must be at least 1")
         if "{uid}" not in self.events_url_template:
             raise ValueError("NETEASE_EVENTS_URL_TEMPLATE must contain {uid}")
+        if not self.notification_endpoint.startswith(("http://", "https://")):
+            raise ValueError("PUSH_ENDPOINT must be an HTTP(S) URL")
 
     def safe_summary(self) -> dict[str, object]:
         return {
