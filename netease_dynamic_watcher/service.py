@@ -52,15 +52,24 @@ class WatcherService:
         ):
             for event in parse_events(payload, user_id=self.target_uid):
                 events_by_id[event.event_id] = event
-
         events = list(events_by_id.values())
+        events.sort(key=lambda event: (event.publish_time_ms, event.event_id))
+        return events
+
+    def _fetch_recent_events(self) -> list:
+        payload = self.client.fetch_user_events(
+            self.events_url,
+            limit=10,
+            lasttime=-1,
+        )
+        events = parse_events(payload, user_id=self.target_uid)
         events.sort(key=lambda event: (event.publish_time_ms, event.event_id))
         return events
 
     def run_once(self, *, backfill: bool = False) -> RunReport:
         was_initialized = self.store.is_initialized(self.target_uid)
 
-        if backfill or not was_initialized:
+        if backfill:
             events = self._fetch_all_history()
             self.store.save_many(events)
             self.store.mark_initialized(self.target_uid)
@@ -71,13 +80,16 @@ class WatcherService:
                 delivered_notifications=0,
             )
 
-        payload = self.client.fetch_user_events(
-            self.events_url,
-            limit=10,
-            lasttime=-1,
-        )
-        events = parse_events(payload, user_id=self.target_uid)
-        events.sort(key=lambda event: (event.publish_time_ms, event.event_id))
+        events = self._fetch_recent_events()
+        if not was_initialized:
+            self.store.save_many(events)
+            self.store.mark_initialized(self.target_uid)
+            return RunReport(
+                initialized_now=True,
+                fetched_events=len(events),
+                new_events=0,
+                delivered_notifications=0,
+            )
 
         new_events = [
             event
