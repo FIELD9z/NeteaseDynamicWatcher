@@ -8,7 +8,7 @@ from netease_dynamic_watcher.store import StateStore
 
 
 class EventClient(Protocol):
-    def fetch_user_events(self, url: str) -> dict: ...
+    def fetch_user_events(self, url: str, *, limit: int, lasttime: int = -1) -> dict: ...
 
 
 class EventNotifier(Protocol):
@@ -28,26 +28,23 @@ class RunReport:
 
 
 class WatcherService:
-    def __init__(
-        self,
-        client: EventClient,
-        store: StateStore,
-        notifier: EventNotifier,
-        target_uid: str,
-        events_url: str,
-    ) -> None:
+    def __init__(self, client, store, notifier, target_uid, events_url):
         self.client = client
         self.store = store
         self.notifier = notifier
         self.target_uid = target_uid
         self.events_url = events_url
 
-    def run_once(self) -> RunReport:
-        payload = self.client.fetch_user_events(self.events_url)
+    def run_once(self, *, backfill: bool = False) -> RunReport:
+        payload = self.client.fetch_user_events(
+            self.events_url,
+            limit=100,
+            lasttime=-1,
+        )
         events = parse_events(payload, user_id=self.target_uid)
         events.sort(key=lambda event: (event.publish_time_ms, event.event_id))
 
-        if not self.store.is_initialized(self.target_uid):
+        if not self.store.is_initialized(self.target_uid) or backfill:
             self.store.save_many(events)
             self.store.mark_initialized(self.target_uid)
             return RunReport(
