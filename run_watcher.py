@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import argparse
 import time
 
 from netease_dynamic_watcher.config import Config
 
 
-# The concrete wiring is intentionally kept local. Secrets are never stored here.
-def run_forever(interval_seconds: int = 900):
+def run_once() -> None:
     from netease_dynamic_watcher.client import NeteaseClient
     from netease_dynamic_watcher.notifier import PushMeNotifier, PushNotifier
     from netease_dynamic_watcher.service import WatcherService
     from netease_dynamic_watcher.store import StateStore
 
-    config = Config.from_env()
+    config = Config.from_sources()
+    config.validate_runtime()
+
     client = NeteaseClient(config.cookie, config.request_timeout_seconds)
     notifier = PushNotifier(
-        PushMeNotifier(config.notification_key).send
+        lambda title, body: PushMeNotifier(
+            config.notification_key,
+            config.notification_endpoint,
+        ).send(title, body)
     )
     service = WatcherService(
         client=client,
@@ -24,11 +29,22 @@ def run_forever(interval_seconds: int = 900):
         target_uid=config.target_uid,
         events_url=config.events_url_template.format(uid=config.target_uid),
     )
+    report = service.run_once()
+    print(report)
 
+
+def run_forever(interval_seconds: int = 900):
     while True:
-        service.run_once()
+        run_once()
         time.sleep(interval_seconds)
 
 
 if __name__ == "__main__":
-    run_forever()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true")
+    args = parser.parse_args()
+
+    if args.once:
+        run_once()
+    else:
+        run_forever()
