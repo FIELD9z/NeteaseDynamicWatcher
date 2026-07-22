@@ -331,6 +331,75 @@ select {
   font-size: 17px;
   line-height: 1.85;
 }
+
+.song-card {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(135deg, var(--surface-soft), color-mix(in srgb, var(--surface-soft) 86%, var(--accent) 14%));
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+a:has(> .song-card) { text-decoration: none; }
+.song-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 34px rgba(31, 42, 68, 0.10);
+}
+.song-cover {
+  width: 78px;
+  height: 78px;
+  overflow: hidden;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #2f3138, #111217);
+}
+.song-cover img { width: 100%; height: 100%; object-fit: cover; }
+.song-cover-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: #fff;
+  font-size: 34px;
+}
+.song-info { min-width: 0; }
+.song-info span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.song-info strong {
+  display: block;
+  overflow: hidden;
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-info p {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-arrow {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 800;
+}
+
 .forward-card {
   margin: 15px 0;
   padding: 15px 17px;
@@ -443,6 +512,8 @@ body.compact .date-rail { padding-top: 16px; }
   .date-rail { padding-left: 6px; padding-right: 6px; }
   .event-body { padding: 16px; }
   .event-header { align-items: flex-start; }
+  .song-card { grid-template-columns: 58px minmax(0, 1fr) auto; gap: 10px; }
+  .song-cover { width: 58px; height: 58px; border-radius: 11px; }
   .gallery-count-2, .gallery-count-3, .gallery-count-4 { grid-template-columns: 1fr; }
   .event-footer { align-items: flex-start; flex-direction: column; }
   .event-actions details[open] { width: 100%; }
