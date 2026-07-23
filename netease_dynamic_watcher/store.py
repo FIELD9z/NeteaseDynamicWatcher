@@ -149,10 +149,7 @@ class StateStore:
                     """
                     INSERT INTO notification_state(user_id, event_id, state, last_error)
                     VALUES (?, ?, ?, '')
-                    ON CONFLICT(user_id, event_id) DO UPDATE SET
-                        state=excluded.state,
-                        last_error='',
-                        updated_at=CURRENT_TIMESTAMP
+                    ON CONFLICT(user_id, event_id) DO NOTHING
                     """,
                     (event.user_id, event.event_id, notification_state),
                 )
@@ -185,10 +182,7 @@ class StateStore:
                     """
                     INSERT INTO notification_state(user_id, event_id, state, last_error)
                     VALUES (?, ?, ?, '')
-                    ON CONFLICT(user_id, event_id) DO UPDATE SET
-                        state=excluded.state,
-                        last_error='',
-                        updated_at=CURRENT_TIMESTAMP
+                    ON CONFLICT(user_id, event_id) DO NOTHING
                     """,
                     [
                         (event.user_id, event.event_id, notification_state)
