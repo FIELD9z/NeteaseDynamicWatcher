@@ -15,6 +15,7 @@ class Event:
     publish_time_ms: int
     url: str
     raw_type: str = ""
+    avatar_url: str = ""
     image_urls: tuple[str, ...] = ()
     video_urls: tuple[str, ...] = ()
     forwarded_event_id: str = ""
