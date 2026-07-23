@@ -23,35 +23,17 @@ from netease_dynamic_watcher.runtime_state import collect_runtime_summary  # noq
 
 def export_json(events: list[dict[str, Any]], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(events, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    output.write_text(json.dumps(events, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def export_csv(events: list[dict[str, Any]], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     fields = [
-        "event_id",
-        "user_id",
-        "nickname",
-        "event_type",
-        "raw_type",
-        "published_at",
-        "summary",
-        "image_urls",
-        "video_urls",
-        "forwarded_event_id",
-        "forwarded_summary",
-        "comment_count",
-        "share_count",
-        "liked_count",
-        "comment_thread_id",
-        "url",
-        "seen_at",
-        "song_name",
-        "artist_name",
-        "album_name",
+        "event_id", "user_id", "nickname", "event_type", "raw_type",
+        "published_at", "summary", "image_urls", "video_urls",
+        "forwarded_event_id", "forwarded_summary", "comment_count",
+        "share_count", "liked_count", "comment_thread_id", "url",
+        "seen_at", "song_name", "artist_name", "album_name",
         "raw_payload_json",
     ]
     with output.open("w", newline="", encoding="utf-8-sig") as file:
@@ -59,58 +41,55 @@ def export_csv(events: list[dict[str, Any]], output: Path) -> None:
         writer.writeheader()
         for event in events:
             song = extract_song(event)
-            writer.writerow(
-                {
-                    "event_id": event.get("event_id", ""),
-                    "user_id": event.get("user_id", ""),
-                    "nickname": event.get("nickname", ""),
-                    "event_type": event.get("event_type", ""),
-                    "raw_type": event.get("raw_type", ""),
-                    "published_at": format_time(event.get("publish_time_ms")),
-                    "summary": event.get("summary", ""),
-                    "image_urls": "\n".join(event.get("image_urls") or []),
-                    "video_urls": "\n".join(event.get("video_urls") or []),
-                    "forwarded_event_id": event.get("forwarded_event_id", ""),
-                    "forwarded_summary": event.get("forwarded_summary", ""),
-                    "comment_count": event.get("comment_count", 0),
-                    "share_count": event.get("share_count", 0),
-                    "liked_count": event.get("liked_count", 0),
-                    "comment_thread_id": event.get("comment_thread_id", ""),
-                    "url": event.get("url", ""),
-                    "seen_at": event.get("seen_at", ""),
-                    "song_name": song.get("name", ""),
-                    "artist_name": song.get("artists", ""),
-                    "album_name": song.get("album", ""),
-                    "raw_payload_json": json.dumps(
-                        event.get("raw_payload") or {},
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                }
-            )
+            writer.writerow({
+                "event_id": event.get("event_id", ""),
+                "user_id": event.get("user_id", ""),
+                "nickname": event.get("nickname", ""),
+                "event_type": event.get("event_type", ""),
+                "raw_type": event.get("raw_type", ""),
+                "published_at": format_time(event.get("publish_time_ms")),
+                "summary": event.get("summary", ""),
+                "image_urls": "\n".join(event.get("image_urls") or []),
+                "video_urls": "\n".join(event.get("video_urls") or []),
+                "forwarded_event_id": event.get("forwarded_event_id", ""),
+                "forwarded_summary": event.get("forwarded_summary", ""),
+                "comment_count": event.get("comment_count", 0),
+                "share_count": event.get("share_count", 0),
+                "liked_count": event.get("liked_count", 0),
+                "comment_thread_id": event.get("comment_thread_id", ""),
+                "url": event.get("url", ""),
+                "seen_at": event.get("seen_at", ""),
+                "song_name": song.get("name", ""),
+                "artist_name": song.get("artists", ""),
+                "album_name": song.get("album", ""),
+                "raw_payload_json": json.dumps(event.get("raw_payload") or {}, ensure_ascii=False, separators=(",", ":")),
+            })
+
+
+def derived_export_paths(database: str | Path, output: str | Path | None = None) -> tuple[Path, Path, Path]:
+    root = Path(database).resolve().parent
+    html = Path(output) if output else root / "export" / "events.html"
+    media = root / "media"
+    return html, media, media / "manifest.json"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="导出网易云动态档案")
     parser.add_argument("--database", default="data/watcher.sqlite3")
-    parser.add_argument("--output", default="data/export/events.html")
-    parser.add_argument("--media-manifest", default="data/media/manifest.json")
+    parser.add_argument("--output")
+    parser.add_argument("--media-manifest")
     args = parser.parse_args()
 
+    output, media_dir, default_manifest = derived_export_paths(args.database, args.output)
+    manifest = Path(args.media_manifest) if args.media_manifest else default_manifest
     archive_database_media(
         args.database,
-        output_dir="data/media",
-        manifest_path=args.media_manifest,
+        output_dir=media_dir,
+        manifest_path=manifest,
         include_videos=True,
     )
     events = load_archive_events(args.database)
-    output = Path(args.output)
-    write_archive_html(
-        events,
-        output,
-        media_manifest=args.media_manifest,
-        runtime_summary=collect_runtime_summary(args.database),
-    )
+    write_archive_html(events, output, media_manifest=manifest, runtime_summary=collect_runtime_summary(args.database))
     export_json(events, output.with_suffix(".json"))
     export_csv(events, output.with_suffix(".csv"))
     print(f"已导出 {len(events)} 条动态：{output.resolve()}")
