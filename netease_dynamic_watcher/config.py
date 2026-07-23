@@ -95,6 +95,7 @@ class Config:
     likers_url_template: str = ""
     interaction_page_size: int = 100
     interaction_max_pages: int = 20
+    interaction_batch_size: int = 20
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Config":
@@ -128,6 +129,7 @@ class Config:
             ).strip(),
             interaction_page_size=_integer_setting(env, "INTERACTION_PAGE_SIZE", 100),
             interaction_max_pages=_integer_setting(env, "INTERACTION_MAX_PAGES", 20),
+            interaction_batch_size=_integer_setting(env, "INTERACTION_BATCH_SIZE", 20),
         )
 
     @classmethod
@@ -171,6 +173,8 @@ class Config:
                 raise ValueError("INTERACTION_PAGE_SIZE must be at least 1")
             if self.interaction_max_pages < 1:
                 raise ValueError("INTERACTION_MAX_PAGES must be at least 1")
+            if self.interaction_batch_size < 1:
+                raise ValueError("INTERACTION_BATCH_SIZE must be at least 1")
 
     def safe_summary(self) -> dict[str, object]:
         return {
@@ -179,6 +183,7 @@ class Config:
             "database_path": self.database_path,
             "request_timeout_seconds": self.request_timeout_seconds,
             "interactions_enabled": self.interactions_enabled,
+            "interaction_batch_size": self.interaction_batch_size,
             "has_likers_endpoint": bool(self.likers_url_template),
             "has_cookie": bool(self.cookie),
             "has_notification_key": bool(self.notification_key),
