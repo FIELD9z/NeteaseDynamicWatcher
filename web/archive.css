@@ -309,10 +309,17 @@ select {
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
+  overflow: hidden;
   border-radius: 14px;
   color: #fff;
   background: linear-gradient(145deg, var(--accent), #8d4cff);
   font-weight: 800;
+}
+.avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .identity h3 { margin: 0; font-size: 16px; }
 .identity time { display: block; color: var(--muted); font-size: 12px; }
