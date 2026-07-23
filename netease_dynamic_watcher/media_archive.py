@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from contextlib import closing
 import hashlib
 import ipaddress
 import json
@@ -111,7 +112,7 @@ def load_events(database: str | Path) -> list[dict[str, Any]]:
     database_path = Path(database)
     if not database_path.exists():
         raise FileNotFoundError(f"数据库不存在：{database_path}")
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection:
         rows = connection.execute("SELECT payload FROM events").fetchall()
 
     events: list[dict[str, Any]] = []

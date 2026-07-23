@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from contextlib import closing
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import Any
 def load_events(database: Path) -> list[dict[str, Any]]:
     if not database.exists():
         raise SystemExit(f"数据库不存在：{database}")
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         rows = connection.execute(
             "SELECT payload, seen_at FROM events"
         ).fetchall()

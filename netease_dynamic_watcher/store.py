@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Iterable
 
@@ -15,7 +16,7 @@ class StateStore:
     def __init__(self, path: str):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS events(
@@ -66,7 +67,7 @@ class StateStore:
         self.set_metadata(f"initialized:{user_id}", "1")
 
     def is_seen(self, user_id: str, event_id: str) -> bool:
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute(
                 "SELECT 1 FROM events WHERE user_id=? AND event_id=?",
                 (user_id, event_id),
@@ -160,7 +161,7 @@ class StateStore:
 
     def save(self, event: Event, *, notification_state: str | None = None) -> None:
         self._validate_notification_state(notification_state)
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             payload = self._payload_for_save(conn, event)
             conn.execute(
                 """
@@ -191,7 +192,7 @@ class StateStore:
         values = list(events)
         if not values:
             return
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             rows = [
                 (
                     event.user_id,
@@ -223,7 +224,7 @@ class StateStore:
                 )
 
     def get_pending_events(self, user_id: str, *, limit: int = 100) -> list[Event]:
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             rows = conn.execute(
                 """
                 SELECT events.payload
@@ -241,7 +242,7 @@ class StateStore:
         return events
 
     def pending_notification_count(self, user_id: str) -> int:
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute(
                 """
                 SELECT COUNT(*) FROM notification_state
@@ -252,7 +253,7 @@ class StateStore:
         return int(row[0] if row else 0)
 
     def get_notification_state(self, user_id: str, event_id: str) -> str | None:
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute(
                 """
                 SELECT state FROM notification_state
@@ -281,7 +282,7 @@ class StateStore:
         error: str,
     ) -> None:
         self._validate_notification_state(state)
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.execute(
                 """
                 UPDATE notification_state
@@ -292,14 +293,14 @@ class StateStore:
             )
 
     def get_metadata(self, key: str) -> str | None:
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute(
                 "SELECT value FROM metadata WHERE key=?", (key,)
             ).fetchone()
         return None if row is None else str(row[0])
 
     def set_metadata(self, key: str, value: str) -> None:
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO metadata(key, value) VALUES (?, ?)

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 from collections import Counter, OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -51,7 +52,7 @@ def load_archive_events(database: str | Path) -> list[dict[str, Any]]:
     if not path.exists():
         raise FileNotFoundError(f"数据库不存在：{path}")
 
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         rows = connection.execute("SELECT payload, seen_at FROM events").fetchall()
 
     events: list[dict[str, Any]] = []

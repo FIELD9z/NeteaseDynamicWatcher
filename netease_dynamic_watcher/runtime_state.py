@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -93,7 +94,7 @@ def collect_database_summary(database_path: str | Path) -> dict[str, Any]:
 
     publish_times: list[int] = []
     try:
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection:
             rows = connection.execute("SELECT payload FROM events").fetchall()
     except sqlite3.Error as exc:
         summary["database_error"] = f"{type(exc).__name__}: {exc}"
