@@ -13,6 +13,7 @@ from netease_dynamic_watcher.archive_view import (  # noqa: E402
     load_archive_events,
     write_archive_html,
 )
+from netease_dynamic_watcher.interaction_export import write_interaction_assets  # noqa: E402
 from netease_dynamic_watcher.media_archive import archive_database_media  # noqa: E402
 from netease_dynamic_watcher.runtime_state import collect_runtime_summary  # noqa: E402
 
@@ -81,6 +82,7 @@ def main() -> None:
         media_manifest=media_manifest,
         runtime_summary=collect_runtime_summary(args.database),
     )
+    write_interaction_assets(args.database, output)
 
     if media_report is not None:
         print("媒体归档结果：", media_report)
