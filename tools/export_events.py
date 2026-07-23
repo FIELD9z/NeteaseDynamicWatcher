@@ -17,8 +17,28 @@ from netease_dynamic_watcher.archive_view import (  # noqa: E402
     load_archive_events,
     write_archive_html,
 )
+from netease_dynamic_watcher.interaction_export import (  # noqa: E402
+    load_interaction_snapshot,
+    write_interaction_assets,
+)
 from netease_dynamic_watcher.media_archive import archive_database_media  # noqa: E402
 from netease_dynamic_watcher.runtime_state import collect_runtime_summary  # noqa: E402
+
+
+def attach_interactions(
+    events: list[dict[str, Any]],
+    interactions: dict[str, Any],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for event in events:
+        value = dict(event)
+        event_id = str(value.get("event_id") or "")
+        value["interactions"] = interactions.get(
+            event_id,
+            {"comments": [], "likers": [], "state": {}},
+        )
+        result.append(value)
+    return result
 
 
 def export_json(events: list[dict[str, Any]], output: Path) -> None:
@@ -53,6 +73,9 @@ def export_csv(events: list[dict[str, Any]], output: Path) -> None:
         "song_name",
         "artist_name",
         "album_name",
+        "comments_json",
+        "likers_json",
+        "interaction_state_json",
         "raw_payload_json",
     ]
     with output.open("w", newline="", encoding="utf-8-sig") as file:
@@ -60,6 +83,8 @@ def export_csv(events: list[dict[str, Any]], output: Path) -> None:
         writer.writeheader()
         for event in events:
             song = extract_song(event)
+            interactions = event.get("interactions")
+            interactions = interactions if isinstance(interactions, dict) else {}
             writer.writerow(
                 {
                     "event_id": event.get("event_id", ""),
@@ -83,6 +108,21 @@ def export_csv(events: list[dict[str, Any]], output: Path) -> None:
                     "song_name": song.get("name", ""),
                     "artist_name": song.get("artists", ""),
                     "album_name": song.get("album", ""),
+                    "comments_json": json.dumps(
+                        interactions.get("comments") or [],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "likers_json": json.dumps(
+                        interactions.get("likers") or [],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "interaction_state_json": json.dumps(
+                        interactions.get("state") or {},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                     "raw_payload_json": json.dumps(
                         event.get("raw_payload") or {},
                         ensure_ascii=False,
@@ -143,14 +183,17 @@ def main() -> None:
         )
 
     events = load_archive_events(args.database)
+    interactions = load_interaction_snapshot(args.database)
+    export_events = attach_interactions(events, interactions)
     write_archive_html(
         events,
         output,
         media_manifest=manifest,
         runtime_summary=collect_runtime_summary(args.database),
     )
-    export_json(events, output.with_suffix(".json"))
-    export_csv(events, output.with_suffix(".csv"))
+    write_interaction_assets(args.database, output)
+    export_json(export_events, output.with_suffix(".json"))
+    export_csv(export_events, output.with_suffix(".csv"))
 
     if args.skip_archive:
         print("已跳过媒体归档；本次未发起媒体网络请求。")
