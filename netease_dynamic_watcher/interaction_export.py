@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Any
-
-from netease_dynamic_watcher.media_archive import canonical_media_url
 
 
 def _decode(value: Any) -> dict[str, Any]:
@@ -31,64 +28,19 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _avatar_map(
-    manifest_path: str | Path,
-    output_html: Path,
-) -> dict[tuple[str, str], str]:
-    path = Path(manifest_path)
-    if not path.exists():
-        return {}
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    items = document.get("items") if isinstance(document, dict) else []
-    result: dict[tuple[str, str], str] = {}
-    for item in items if isinstance(items, list) else []:
-        if not isinstance(item, dict):
-            continue
-        if item.get("kind") != "interaction_avatar":
-            continue
-        if item.get("status") not in {"downloaded", "existing", "deduplicated"}:
-            continue
-        event_id = str(item.get("event_id") or "")
-        source_url = str(item.get("source_url") or "")
-        canonical = str(item.get("canonical_url") or "")
-        canonical = canonical or canonical_media_url(source_url, "avatar")
-        local_path = str(item.get("local_path") or "")
-        absolute = path.parent / local_path
-        if event_id and canonical and local_path and absolute.exists():
-            result[(event_id, canonical)] = os.path.relpath(
-                absolute,
-                output_html.parent,
-            ).replace(os.sep, "/")
-    return result
+def _public_user(value: Any) -> dict[str, Any]:
+    user = _decode(value)
+    return {
+        "user_id": str(user.get("user_id") or ""),
+        "nickname": str(user.get("nickname") or "未知用户"),
+        "profile_url": str(user.get("profile_url") or ""),
+    }
 
 
-def _attach_local_avatar(
-    user: Any,
-    *,
-    event_id: str,
-    avatars: dict[tuple[str, str], str],
-) -> dict[str, Any]:
-    value = _decode(user)
-    source_url = str(value.get("avatar_url") or "")
-    canonical = canonical_media_url(source_url, "avatar")
-    value["avatar_local"] = avatars.get((event_id, canonical), "") if canonical else ""
-    return value
-
-
-def load_interaction_snapshot(
-    database: str | Path,
-    *,
-    media_manifest: str | Path,
-    output_html: str | Path,
-) -> dict[str, Any]:
+def load_interaction_snapshot(database: str | Path) -> dict[str, Any]:
     database_path = Path(database)
-    output_path = Path(output_html)
     if not database_path.exists():
         return {}
-    avatars = _avatar_map(media_manifest, output_path)
     result: dict[str, Any] = {}
     with closing(sqlite3.connect(database_path)) as connection:
         if not _table_exists(connection, "events"):
@@ -115,24 +67,28 @@ def load_interaction_snapshot(
                     comment = _decode(payload)
                     if not comment:
                         continue
-                    comment["user"] = _attach_local_avatar(
-                        comment.get("user"),
-                        event_id=event_id,
-                        avatars=avatars,
-                    )
-                    replies = []
+                    replies: list[dict[str, Any]] = []
                     for reply in comment.get("replies") or []:
                         if not isinstance(reply, dict):
                             continue
-                        value = dict(reply)
-                        value["user"] = _attach_local_avatar(
-                            value.get("user"),
-                            event_id=event_id,
-                            avatars=avatars,
+                        replies.append(
+                            {
+                                "content": str(reply.get("content") or ""),
+                                "user": _public_user(reply.get("user")),
+                            }
                         )
-                        replies.append(value)
-                    comment["replies"] = replies
-                    comments.append(comment)
+                    comments.append(
+                        {
+                            "comment_id": str(comment.get("comment_id") or ""),
+                            "content": str(comment.get("content") or ""),
+                            "time_ms": int(comment.get("time_ms") or 0),
+                            "time_text": str(comment.get("time_text") or ""),
+                            "liked_count": int(comment.get("liked_count") or 0),
+                            "hot": bool(comment.get("hot")),
+                            "user": _public_user(comment.get("user")),
+                            "replies": replies,
+                        }
+                    )
             if has_likers:
                 rows = connection.execute(
                     """
@@ -144,13 +100,7 @@ def load_interaction_snapshot(
                 for (payload,) in rows:
                     liker = _decode(payload)
                     if liker:
-                        likers.append(
-                            _attach_local_avatar(
-                                liker,
-                                event_id=event_id,
-                                avatars=avatars,
-                            )
-                        )
+                        likers.append(_public_user(liker))
             if has_state:
                 row = connection.execute(
                     """
@@ -183,11 +133,28 @@ def load_interaction_snapshot(
     return result
 
 
+def _inject_assets(output_path: Path) -> None:
+    html = output_path.read_text(encoding="utf-8")
+    stylesheet = '<link rel="stylesheet" href="assets/interaction-ui.css">'
+    data_script = '<script src="assets/interactions-data.js"></script>'
+    ui_script = '<script src="assets/interaction-ui.js"></script>'
+    if stylesheet not in html:
+        html = html.replace("</head>", f"  {stylesheet}\n</head>")
+    if data_script not in html:
+        html = html.replace(
+            '<script src="assets/archive.js"></script>',
+            '<script src="assets/interactions-data.js"></script>\n'
+            '<script src="assets/archive.js"></script>\n'
+            '<script src="assets/interaction-ui.js"></script>',
+        )
+    temporary = output_path.with_suffix(output_path.suffix + ".tmp")
+    temporary.write_text(html, encoding="utf-8")
+    temporary.replace(output_path)
+
+
 def write_interaction_assets(
     database: str | Path,
     output_html: str | Path,
-    *,
-    media_manifest: str | Path,
 ) -> Path:
     output_path = Path(output_html)
     assets = output_path.parent / "assets"
@@ -199,11 +166,7 @@ def write_interaction_assets(
             raise FileNotFoundError(f"缺少互动 UI 资源：{source}")
         shutil.copyfile(source, assets / name)
 
-    snapshot = load_interaction_snapshot(
-        database,
-        media_manifest=media_manifest,
-        output_html=output_path,
-    )
+    snapshot = load_interaction_snapshot(database)
     destination = assets / "interactions-data.js"
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
@@ -212,4 +175,5 @@ def write_interaction_assets(
         encoding="utf-8",
     )
     temporary.replace(destination)
+    _inject_assets(output_path)
     return destination
