@@ -30,7 +30,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 Chrome/124 Safari/537.36"
 )
-_IMAGE_KINDS = {"image", "song_cover"}
+_IMAGE_KINDS = {"image", "song_cover", "avatar"}
 _PROXY_FAKE_IP_NETWORKS = (ipaddress.ip_network("198.18.0.0/15"),)
 
 
@@ -136,6 +136,9 @@ def iter_media(
             continue
 
         sources: list[tuple[str, str]] = []
+        avatar_url = str(event.get("avatar_url") or "").strip()
+        if avatar_url:
+            sources.append(("avatar", avatar_url))
         sources.extend(
             ("image", url)
             for url in unique_media_urls(event.get("image_urls") or [], "image")
@@ -429,6 +432,7 @@ def archive_database_media(
             destination_base = event_directory / f"{candidate.kind}-{url_digest}"
             try:
                 validate_download_target(candidate.source_url, allowed_suffixes)
+                expected_kind = "video" if candidate.kind == "video" else "image"
                 max_bytes = (
                     max_video_bytes
                     if candidate.kind == "video"
@@ -438,7 +442,7 @@ def archive_database_media(
                     opener,
                     candidate.source_url,
                     destination_base,
-                    expected_kind=candidate.kind,
+                    expected_kind=expected_kind,
                     timeout=max(timeout, 1),
                     max_bytes=max(max_bytes, 1),
                 )
