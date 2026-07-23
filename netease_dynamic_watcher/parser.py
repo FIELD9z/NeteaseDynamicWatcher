@@ -70,7 +70,11 @@ def _normalized_key(value: Any) -> str:
 
 
 def _collect_image_urls(value: Any) -> tuple[str, ...]:
-    """Keep one preferred URL per image object, not every resized variant."""
+    """Keep one preferred URL for each logical image object.
+
+    Resized variants inside one object are collapsed, while two separate image
+    objects remain two positions even when they point to identical content.
+    """
 
     result: list[str] = []
 
@@ -86,7 +90,8 @@ def _collect_image_urls(value: Any) -> tuple[str, ...]:
             if selected:
                 result.append(selected)
 
-            # Continue through non-URL children because containers can be nested.
+            # Containers can be nested. URL alternatives themselves are not
+            # traversed, which prevents one image from becoming many thumbnails.
             for key, child in node.items():
                 if _normalized_key(key) not in _IMAGE_URL_KEYS:
                     visit(child)
@@ -95,7 +100,7 @@ def _collect_image_urls(value: Any) -> tuple[str, ...]:
                 visit(child)
 
     visit(value)
-    return tuple(unique_media_urls(result, "image"))
+    return tuple(result)
 
 
 def _collect_urls(value: Any, allowed_keys: set[str], kind: str) -> tuple[str, ...]:
@@ -124,12 +129,17 @@ def _collect_urls(value: Any, allowed_keys: set[str], kind: str) -> tuple[str, .
 def _extract_image_urls_from_containers(
     sources: Iterable[dict[str, Any]],
 ) -> tuple[str, ...]:
-    urls: list[str] = []
+    # NetEase can mirror the same picture list in the outer event and embedded
+    # JSON. Use the first non-empty logical container instead of concatenating
+    # mirrored copies, but preserve positions inside that container.
     for source in sources:
         for key in _IMAGE_CONTAINER_KEYS:
-            if key in source:
-                urls.extend(_collect_image_urls(source[key]))
-    return tuple(unique_media_urls(urls, "image"))
+            if key not in source:
+                continue
+            urls = _collect_image_urls(source[key])
+            if urls:
+                return urls
+    return ()
 
 
 def _extract_urls_from_containers(
@@ -204,6 +214,11 @@ def parse_events(payload: dict[str, Any], user_id: str = "") -> list[Event]:
         nickname = str(
             item.get("nickname") or user.get("nickname") or "未知用户"
         ).strip()
+        avatar_url = str(
+            user.get("avatarUrl") or item.get("avatarUrl") or ""
+        ).strip()
+        if not avatar_url.startswith(("http://", "https://")):
+            avatar_url = ""
 
         image_urls = _extract_image_urls_from_containers((item, embedded))
         video_urls = _extract_urls_from_containers(
@@ -275,6 +290,7 @@ def parse_events(payload: dict[str, Any], user_id: str = "") -> list[Event]:
                 publish_time_ms=publish_time_ms,
                 url=page_url,
                 raw_type=raw_type,
+                avatar_url=avatar_url,
                 image_urls=image_urls,
                 video_urls=video_urls,
                 forwarded_event_id=forwarded_event_id,
