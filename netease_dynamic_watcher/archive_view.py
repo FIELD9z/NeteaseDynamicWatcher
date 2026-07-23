@@ -64,11 +64,13 @@ def load_archive_events(database: str | Path) -> list[dict[str, Any]]:
             continue
         event = dict(event)
         event["seen_at"] = seen_at
-        # Old database rows may contain multiple resized URLs for one image.
-        event["image_urls"] = unique_media_urls(
-            event.get("image_urls") or [],
-            "image",
-        )
+        # image_urls is a logical ordered list. It may intentionally contain the
+        # same canonical image more than once when the author posted it twice.
+        event["image_urls"] = [
+            str(value)
+            for value in (event.get("image_urls") or [])
+            if isinstance(value, str) and value.startswith(("http://", "https://"))
+        ]
         event["video_urls"] = unique_media_urls(
             event.get("video_urls") or [],
             "video",
@@ -227,6 +229,21 @@ def _missing_resource(label: str) -> str:
     )
 
 
+def _render_avatar(
+    event: dict[str, Any],
+    output: Path,
+    media_map: MediaMap,
+) -> str:
+    event_id = str(event.get("event_id") or "")
+    nickname = str(event.get("nickname") or "未知用户")
+    avatar_url = str(event.get("avatar_url") or "")
+    local_avatar = _local_media(media_map, event_id, "avatar", avatar_url)
+    if local_avatar:
+        src = safe(_relative_path(local_avatar, output))
+        return f'<div class="avatar"><img src="{src}" loading="lazy" alt="{safe(nickname)}的头像"></div>'
+    return f'<div class="avatar avatar-fallback">{safe(nickname[:1] or "?")}</div>'
+
+
 def _render_song_card(
     event: dict[str, Any],
     song: dict[str, str],
@@ -271,20 +288,19 @@ def _render_images(
     media_map: MediaMap,
 ) -> str:
     event_id = str(event.get("event_id") or "")
+    urls = [
+        str(value)
+        for value in (event.get("image_urls") or [])
+        if isinstance(value, str)
+    ]
     items: list[str] = []
-    rendered_files: set[str] = set()
-    urls = unique_media_urls(event.get("image_urls") or [], "image")
     for index, source_url in enumerate(urls, start=1):
         local = _local_media(media_map, event_id, "image", source_url)
         if not local:
             items.append(_missing_resource(f"图片 {index}"))
             continue
-        resolved = str(local.resolve())
-        if resolved in rendered_files:
-            continue
-        rendered_files.add(resolved)
         image_src = _relative_path(local, output)
-        caption = f"事件 {event_id} · 图片 {len(rendered_files)}"
+        caption = f"事件 {event_id} · 图片 {index}/{len(urls)}"
         items.append(
             f"""
 <button class="media-item" type="button" data-full="{safe(image_src)}" data-caption="{safe(caption)}">
@@ -306,7 +322,6 @@ def _render_videos(
 ) -> str:
     event_id = str(event.get("event_id") or "")
     items: list[str] = []
-    rendered_files: set[str] = set()
     for index, source_url in enumerate(
         unique_media_urls(event.get("video_urls") or [], "video"),
         start=1,
@@ -315,10 +330,6 @@ def _render_videos(
         if not local:
             items.append(_missing_resource(f"视频 {index}"))
             continue
-        resolved = str(local.resolve())
-        if resolved in rendered_files:
-            continue
-        rendered_files.add(resolved)
         video_src = _relative_path(local, output)
         items.append(
             f'<video class="local-video" controls preload="metadata" '
@@ -337,7 +348,6 @@ def _render_event_card(
     weekday = "未知" if published is None else published.strftime("%a")
     timestamp = format_time(event.get("publish_time_ms"))
     nickname = str(event.get("nickname") or "未知用户")
-    avatar = safe(nickname[:1] or "?")
     event_type = str(event.get("event_type") or "dynamic")
     type_label = TYPE_LABELS.get(event_type, event_type)
     event_id = str(event.get("event_id") or "")
@@ -365,6 +375,7 @@ def _render_event_card(
   <span>原始 type</span><code>{safe(event.get('raw_type'))}</code>
   <span>评论线程</span><code>{safe(event.get('comment_thread_id'))}</code>
   <span>入库时间</span><code>{safe(event.get('seen_at'))}</code>
+  <span>头像快照</span><code>{'已保存' if event.get('avatar_url') else '无'}</code>
   <details class="raw-details"><summary>完整原始 JSON</summary><pre>{safe(raw_json)}</pre></details>
 </div>
 """
@@ -389,7 +400,7 @@ def _render_event_card(
   <div class="event-body">
     <header class="event-header">
       <div class="identity">
-        <div class="avatar">{avatar}</div>
+        {_render_avatar(event, output, media_map)}
         <div><h3>{safe(nickname)}</h3><time>{safe(timestamp)}</time></div>
       </div>
       <span class="type-pill">{safe(type_label)}</span>
@@ -426,7 +437,8 @@ def _runtime_copy(runtime_summary: dict[str, Any]) -> tuple[str, str, str]:
         detail = (
             f"获取 {report.get('fetched_events', 0)} 条，"
             f"新增 {report.get('new_events', 0)} 条，"
-            f"通知 {report.get('delivered_notifications', 0)} 条"
+            f"通知 {report.get('delivered_notifications', 0)} 条，"
+            f"待通知 {report.get('pending_notifications', 0)} 条"
         )
     time_value = runtime.get("finished_at") or runtime.get("started_at") or ""
     return status, status_label, str(detail or time_value or "打开页面时读取本地数据库")
@@ -514,7 +526,7 @@ def render_archive_html(
       <div>
         <div class="eyebrow">NETEASE DYNAMIC ARCHIVE</div>
         <h1>把时间线保存成<br>可以慢慢阅读的档案。</h1>
-        <p class="hero-copy">页面只加载本地媒体文件。远程地址保留在原始 JSON 中，但不会被页面直接加载。</p>
+        <p class="hero-copy">页面只加载本地媒体文件。每条动态保留自己的头像快照；重复图片位置会按原发布顺序显示。</p>
       </div>
       <button id="theme-toggle" class="icon-button" type="button" aria-label="切换主题">◐</button>
     </div>
