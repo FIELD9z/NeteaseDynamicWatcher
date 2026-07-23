@@ -19,6 +19,7 @@ import urllib.request
 
 DEFAULT_ALLOWED_HOST_SUFFIXES = (
     "music.126.net",
+    "vod.126.net",
     "music.163.com",
     "netease.com",
     "127.net",
@@ -30,6 +31,7 @@ USER_AGENT = (
     "AppleWebKit/537.36 Chrome/124 Safari/537.36"
 )
 _IMAGE_KINDS = {"image", "song_cover"}
+_PROXY_FAKE_IP_NETWORKS = (ipaddress.ip_network("198.18.0.0/15"),)
 
 
 @dataclass(frozen=True)
@@ -187,6 +189,10 @@ def validate_url_syntax(
     return parts
 
 
+def is_proxy_fake_ip(value: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(value in network for network in _PROXY_FAKE_IP_NETWORKS)
+
+
 def validate_public_target(parts: urllib.parse.SplitResult) -> None:
     hostname = parts.hostname
     if not hostname:
@@ -197,7 +203,10 @@ def validate_public_target(parts: urllib.parse.SplitResult) -> None:
         raise ValueError("无法解析下载主机")
     for address in addresses:
         ip = ipaddress.ip_address(address[4][0])
-        if not ip.is_global:
+        # Clash and similar TUN/Fake-IP DNS modes intentionally map public hosts
+        # into RFC 2544's benchmarking range. The hostname has already passed a
+        # strict NetEase CDN suffix allowlist, so this one range is safe to accept.
+        if not ip.is_global and not is_proxy_fake_ip(ip):
             raise ValueError(f"下载主机解析到非公网地址：{ip}")
 
 
