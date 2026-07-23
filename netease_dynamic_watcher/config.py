@@ -8,6 +8,10 @@ from urllib.parse import urlsplit
 
 
 DEFAULT_EVENTS_URL_TEMPLATE = "https://music.163.com/api/event/get/{uid}"
+DEFAULT_COMMENTS_URL_TEMPLATE = (
+    "https://music.163.com/api/v1/resource/comments/{thread_id}"
+    "?limit={limit}&offset={offset}"
+)
 
 
 def read_env_file(path: str | Path = ".env") -> dict[str, str]:
@@ -40,12 +44,40 @@ def _integer_setting(
         raise ValueError(f"{key} must be an integer") from exc
 
 
+def _boolean_setting(
+    env: Mapping[str, str],
+    key: str,
+    default: bool,
+) -> bool:
+    raw_value = str(env.get(key, "1" if default else "0")).strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{key} must be a boolean value")
+
+
 def _validate_http_url(value: str, name: str) -> None:
     parts = urlsplit(value)
     if parts.scheme not in {"http", "https"} or not parts.hostname:
         raise ValueError(f"{name} must be an HTTP(S) URL with a hostname")
     if parts.username or parts.password:
         raise ValueError(f"{name} must not contain credentials")
+
+
+def _validate_template(value: str, name: str, required_fields: tuple[str, ...]) -> None:
+    for field in required_fields:
+        if "{" + field + "}" not in value:
+            raise ValueError(f"{name} must contain {{{field}}}")
+    sample = value
+    for field, replacement in (
+        ("uid", "1"),
+        ("thread_id", "A_EV_2_1_1"),
+        ("limit", "20"),
+        ("offset", "0"),
+    ):
+        sample = sample.replace("{" + field + "}", replacement)
+    _validate_http_url(sample, name)
 
 
 @dataclass(frozen=True)
@@ -58,6 +90,11 @@ class Config:
     events_url_template: str = DEFAULT_EVENTS_URL_TEMPLATE
     notification_endpoint: str = "https://push.i-i.me/"
     request_timeout_seconds: int = 15
+    interactions_enabled: bool = True
+    comments_url_template: str = DEFAULT_COMMENTS_URL_TEMPLATE
+    likers_url_template: str = ""
+    interaction_page_size: int = 100
+    interaction_max_pages: int = 20
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Config":
@@ -80,6 +117,17 @@ class Config:
                 "REQUEST_TIMEOUT_SECONDS",
                 15,
             ),
+            interactions_enabled=_boolean_setting(env, "INTERACTIONS_ENABLED", True),
+            comments_url_template=env.get(
+                "NETEASE_EVENT_COMMENTS_URL_TEMPLATE",
+                DEFAULT_COMMENTS_URL_TEMPLATE,
+            ).strip(),
+            likers_url_template=env.get(
+                "NETEASE_EVENT_LIKERS_URL_TEMPLATE",
+                "",
+            ).strip(),
+            interaction_page_size=_integer_setting(env, "INTERACTION_PAGE_SIZE", 100),
+            interaction_max_pages=_integer_setting(env, "INTERACTION_MAX_PAGES", 20),
         )
 
     @classmethod
@@ -101,10 +149,28 @@ class Config:
             raise ValueError("REQUEST_TIMEOUT_SECONDS must be at least 1")
         if not self.database_path:
             raise ValueError("DATABASE_PATH must not be empty")
-        if "{uid}" not in self.events_url_template:
-            raise ValueError("NETEASE_EVENTS_URL_TEMPLATE must contain {uid}")
-        _validate_http_url(self.events_url_template.format(uid=self.target_uid), "NETEASE_EVENTS_URL_TEMPLATE")
+        _validate_template(
+            self.events_url_template,
+            "NETEASE_EVENTS_URL_TEMPLATE",
+            ("uid",),
+        )
         _validate_http_url(self.notification_endpoint, "PUSH_ENDPOINT")
+        if self.interactions_enabled:
+            _validate_template(
+                self.comments_url_template,
+                "NETEASE_EVENT_COMMENTS_URL_TEMPLATE",
+                ("thread_id", "limit", "offset"),
+            )
+            if self.likers_url_template:
+                _validate_template(
+                    self.likers_url_template,
+                    "NETEASE_EVENT_LIKERS_URL_TEMPLATE",
+                    ("thread_id", "limit", "offset"),
+                )
+            if self.interaction_page_size < 1:
+                raise ValueError("INTERACTION_PAGE_SIZE must be at least 1")
+            if self.interaction_max_pages < 1:
+                raise ValueError("INTERACTION_MAX_PAGES must be at least 1")
 
     def safe_summary(self) -> dict[str, object]:
         return {
@@ -112,6 +178,8 @@ class Config:
             "interval_minutes": self.interval_minutes,
             "database_path": self.database_path,
             "request_timeout_seconds": self.request_timeout_seconds,
+            "interactions_enabled": self.interactions_enabled,
+            "has_likers_endpoint": bool(self.likers_url_template),
             "has_cookie": bool(self.cookie),
             "has_notification_key": bool(self.notification_key),
         }
