@@ -21,17 +21,36 @@ from netease_dynamic_watcher.media_archive import (  # noqa: E402,F401
 )
 
 
+def derived_media_paths(
+    database: str | Path,
+    *,
+    output_dir: str | Path | None = None,
+    manifest: str | Path | None = None,
+) -> tuple[Path, Path]:
+    """Resolve archive paths beside the selected SQLite database by default."""
+    data_directory = Path(database).resolve().parent
+    resolved_output = Path(output_dir) if output_dir else data_directory / "media"
+    resolved_manifest = Path(manifest) if manifest else resolved_output / "manifest.json"
+    return resolved_output, resolved_manifest
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="把数据库中的图片、歌曲封面和视频归档到本地"
+        description="把数据库中的图片、头像、歌曲封面和视频归档到本地"
     )
     parser.add_argument("--database", default="data/watcher.sqlite3")
-    parser.add_argument("--output-dir", default="data/media")
-    parser.add_argument("--manifest", default="data/media/manifest.json")
+    parser.add_argument(
+        "--output-dir",
+        help="默认使用数据库同级的 media 目录",
+    )
+    parser.add_argument(
+        "--manifest",
+        help="默认使用归档目录中的 manifest.json",
+    )
     parser.add_argument(
         "--skip-videos",
         action="store_true",
-        help="只归档图片和歌曲封面",
+        help="归档头像、图片和歌曲封面，但跳过视频",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-items", type=int, default=0, help="0 表示不限制")
@@ -54,6 +73,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    output_dir, manifest = derived_media_paths(
+        args.database,
+        output_dir=args.output_dir,
+        manifest=args.manifest,
+    )
     allowed_suffixes = tuple(
         dict.fromkeys(
             DEFAULT_ALLOWED_HOST_SUFFIXES + tuple(args.allowed_suffixes or ())
@@ -61,8 +85,8 @@ def main() -> None:
     )
     totals = archive_database_media(
         args.database,
-        output_dir=args.output_dir,
-        manifest_path=args.manifest,
+        output_dir=output_dir,
+        manifest_path=manifest,
         include_videos=not args.skip_videos,
         timeout=max(args.timeout, 1),
         max_image_bytes=max(args.max_image_bytes, 1),
@@ -72,8 +96,8 @@ def main() -> None:
         allowed_suffixes=allowed_suffixes,
     )
     print("媒体归档结果：", totals)
-    print("归档目录：", Path(args.output_dir).resolve())
-    print("归档清单：", Path(args.manifest).resolve())
+    print("归档目录：", output_dir.resolve())
+    print("归档清单：", manifest.resolve())
 
 
 if __name__ == "__main__":
