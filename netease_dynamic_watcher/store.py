@@ -74,7 +74,7 @@ class StateStore:
         return row is not None
 
     @staticmethod
-    def _serialize(event: Event) -> str:
+    def _serialize(event: Event, *, avatar_url: str | None = None) -> str:
         return json.dumps(
             {
                 "event_id": event.event_id,
@@ -85,6 +85,7 @@ class StateStore:
                 "publish_time_ms": event.publish_time_ms,
                 "url": event.url,
                 "raw_type": event.raw_type,
+                "avatar_url": event.avatar_url if avatar_url is None else avatar_url,
                 "image_urls": list(event.image_urls),
                 "video_urls": list(event.video_urls),
                 "forwarded_event_id": event.forwarded_event_id,
@@ -111,6 +112,7 @@ class StateStore:
             publish_time_ms=int(value.get("publish_time_ms") or 0),
             url=str(value.get("url") or ""),
             raw_type=str(value.get("raw_type") or ""),
+            avatar_url=str(value.get("avatar_url") or ""),
             image_urls=tuple(value.get("image_urls") or ()),
             video_urls=tuple(value.get("video_urls") or ()),
             forwarded_event_id=str(value.get("forwarded_event_id") or ""),
@@ -131,10 +133,35 @@ class StateStore:
         if state is not None and state not in _NOTIFICATION_STATES:
             raise ValueError(f"Unsupported notification state: {state}")
 
+    def _payload_for_save(self, conn: sqlite3.Connection, event: Event) -> str:
+        """Keep the avatar captured when this event was first archived.
+
+        Old rows without an avatar may be enriched once. After a non-empty avatar
+        has been stored, later backfills cannot replace it with the user's current
+        avatar.
+        """
+
+        row = conn.execute(
+            "SELECT payload FROM events WHERE user_id=? AND event_id=?",
+            (event.user_id, event.event_id),
+        ).fetchone()
+        existing_avatar = ""
+        if row:
+            try:
+                existing = json.loads(str(row[0]))
+            except json.JSONDecodeError:
+                existing = {}
+            if isinstance(existing, dict):
+                existing_avatar = str(existing.get("avatar_url") or "").strip()
+        return self._serialize(
+            event,
+            avatar_url=existing_avatar or event.avatar_url,
+        )
+
     def save(self, event: Event, *, notification_state: str | None = None) -> None:
         self._validate_notification_state(notification_state)
-        payload = self._serialize(event)
         with sqlite3.connect(self.path) as conn:
+            payload = self._payload_for_save(conn, event)
             conn.execute(
                 """
                 INSERT INTO events(user_id, event_id, payload)
@@ -165,6 +192,14 @@ class StateStore:
         if not values:
             return
         with sqlite3.connect(self.path) as conn:
+            rows = [
+                (
+                    event.user_id,
+                    event.event_id,
+                    self._payload_for_save(conn, event),
+                )
+                for event in values
+            ]
             conn.executemany(
                 """
                 INSERT INTO events(user_id, event_id, payload)
@@ -172,10 +207,7 @@ class StateStore:
                 ON CONFLICT(user_id, event_id)
                 DO UPDATE SET payload=excluded.payload
                 """,
-                [
-                    (event.user_id, event.event_id, self._serialize(event))
-                    for event in values
-                ],
+                rows,
             )
             if notification_state is not None:
                 conn.executemany(
